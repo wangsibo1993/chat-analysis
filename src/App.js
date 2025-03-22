@@ -1,190 +1,119 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState } from 'react';
 import './App.css';
+import ConversationPanel from './components/ConversationPanel/ConversationPanel';
+import ChatPanel from './components/ChatPanel/ChatPanel';
+import useFileUpload from './hooks/useFileUpload';
+import useChatApi from './hooks/useChatApi';
+import { parseContentToMessages } from './utils/conversationUtils';
 
 function App() {
+  // 对话展示相关状态
   const [inputText, setInputText] = useState('');
   const [messages, setMessages] = useState([]);
+  const [allConversations, setAllConversations] = useState([]);
+  const [currentConversationIndex, setCurrentConversationIndex] = useState(0);
+  
+  // AI对话相关状态
   const [chatInput, setChatInput] = useState('');
   const [chatMessages, setChatMessages] = useState([]);
-  const [isLoading, setIsLoading] = useState(false);
-  const conversationWindowRef = useRef(null);
-  const chatWindowRef = useRef(null);
+  
+  // 模板预览相关状态
+  const [showPreviewModal, setShowPreviewModal] = useState(false);
+  const [currentTemplate, setCurrentTemplate] = useState({ id: null, name: '', content: '', format: 'markdown' });
+  
+  // 使用自定义钩子
+  const { handleFileUpload } = useFileUpload(setMessages, setAllConversations, setCurrentConversationIndex);
+  const { sendMessage, handleKeyPress, isLoading } = useChatApi(chatMessages, setChatMessages);
 
-  const handleInputChange = (e) => {
-    setInputText(e.target.value);
-  };
+  // 解析消息
+  const parseMessages = (text) => {
+    if (!text.trim()) return;
 
-  const handleChatInputChange = (e) => {
-    setChatInput(e.target.value);
-  };
-
-  const parseMessages = () => {
-    if (!inputText.trim()) return;
-
-    const messagePattern = /(assistant|user):(.*?)(?=(assistant:|user:|$))/gs;
-    const matches = [...inputText.matchAll(messagePattern)];
+    const parsedMessages = parseContentToMessages(text);
     
-    const parsedMessages = matches.map(match => ({
-      role: match[1].trim(),
-      text: match[2].trim()
-    }));
-
-    setMessages(parsedMessages);
+    if (parsedMessages.length > 0) {
+      setMessages(parsedMessages);
+      // 更新对话列表
+      const newConversation = {
+        id: allConversations.length > 0 ? Math.max(...allConversations.map(c => c.id)) + 1 : 1,
+        messages: parsedMessages
+      };
+      setAllConversations([...allConversations, newConversation]);
+      setCurrentConversationIndex(allConversations.length);
+    }
   };
 
-  const sendMessage = async () => {
+  // 发送消息
+  const handleSendMessage = () => {
     if (!chatInput.trim()) return;
-
+    
     const userMessage = {
       role: 'user',
       content: chatInput
     };
-
-    setChatMessages([...chatMessages, userMessage]);
+    
     setChatInput('');
-    setIsLoading(true);
-
-    try {
-      const response = await fetch('http://10.139.162.46:11434/api/chat', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          model: 'qwq:32b',
-          messages: [...chatMessages, userMessage],
-          stream: true
-        }),
-      });
-
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder('utf-8');
-      let done = false;
-      let inferenceProcess = '';
-      let actualResult = '';
-
-      while (!done) {
-        const { value, done: doneReading } = await reader.read();
-        done = doneReading;
-        const chunk = decoder.decode(value, { stream: true });
-        console.log('Received chunk:', chunk);
-        // 假设推理过程和实际结果在流中有特定标记
-        if (chunk.includes('推理过程')) {
-          inferenceProcess += chunk;
-        } else if (chunk.includes('实际结果')) {
-          actualResult += chunk;
-        }
-      }
-
-      console.log('Inference Process:', inferenceProcess);
-      console.log('Actual Result:', actualResult);
-
-      setChatMessages(prev => [...prev, {
-        role: 'assistant',
-        content: `推理过程: ${inferenceProcess}\n实际结果: ${actualResult}`
-      }]);
-    } catch (error) {
-      console.error('Error:', error);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const handleKeyPress = (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      sendMessage();
-    }
-  };
-
-  useEffect(() => {
-    if (conversationWindowRef.current) {
-      conversationWindowRef.current.scrollTop = conversationWindowRef.current.scrollHeight;
-    }
-  }, [messages]);
-
-  useEffect(() => {
-    if (chatWindowRef.current) {
-      chatWindowRef.current.scrollTop = chatWindowRef.current.scrollHeight;
-    }
-  }, [chatMessages]);
-
-  const getAvatar = (role) => {
-    return role === 'assistant' 
-      ? 'https://api.dicebear.com/7.x/bottts/svg?seed=customer-service'
-      : 'https://api.dicebear.com/7.x/avataaars/svg?seed=customer';
+    sendMessage(userMessage);
   };
 
   return (
     <div className="App">
-      <div className="conversation-panel">
-        <div className="panel-header">对话展示</div>
-        <div className="chat-window" ref={conversationWindowRef}>
-          {messages.map((message, index) => (
-            <div key={index} className={`message ${message.role}`}>
-              <div className="message-role">
-                {message.role === 'assistant' ? '坐席' : '客户'}
-              </div>
-              <div className="message-container">
-                <div className="avatar">
-                  <img src={getAvatar(message.role)} alt={message.role} />
-                </div>
-                <div className="message-content">
-                  {message.text}
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-        <div className="input-container">
-          <textarea
-            className="input-box"
-            value={inputText}
-            onChange={handleInputChange}
-            placeholder="请输入对话内容，格式如：assistant:喂。 user:喂，你好。"
-          />
-          <button className="parse-button" onClick={parseMessages}>
-            解析并展示
-          </button>
-        </div>
-      </div>
+      <ConversationPanel 
+        messages={messages}
+        allConversations={allConversations}
+        currentConversationIndex={currentConversationIndex}
+        setCurrentConversationIndex={setCurrentConversationIndex}
+        setMessages={setMessages}
+        setChatInput={setChatInput}
+        onParseMessages={parseMessages}
+        onFileUpload={handleFileUpload}
+      />
 
-      <div className="chat-panel">
-        <div className="panel-header">AI 对话</div>
-        <div className="chat-window" ref={chatWindowRef}>
-          {chatMessages.map((message, index) => (
-            <div key={index} className={`message ${message.role}`}>
-              <div className="message-role">
-                {message.role === 'assistant' ? 'AI' : '我'}
-              </div>
-              <div className="message-container">
-                <div className="avatar">
-                  <img src={getAvatar(message.role)} alt={message.role} />
+      {/* 在App组件中找到ChatPanel组件的使用位置，添加conversationMessages属性 */}
+      <ChatPanel 
+        chatMessages={chatMessages}
+        chatInput={chatInput}
+        setChatInput={setChatInput}
+        isLoading={isLoading}
+        onSendMessage={handleSendMessage}
+        onKeyPress={handleKeyPress}
+        conversationMessages={messages} // 添加这一行，传递对话展示区域的消息
+      />
+      
+      {/* 模板预览模态框 */}
+      {showPreviewModal && (
+        <div className="modal-overlay">
+          <div className="modal-content preview-modal">
+            <h3>预览: {currentTemplate.name}</h3>
+            <div className="template-preview">
+              {currentTemplate.format === 'markdown' ? (
+                <div className="markdown-preview">
+                  <pre>{currentTemplate.content}</pre>
                 </div>
-                <div className="message-content">
-                  {message.content}
-                </div>
-              </div>
+              ) : (
+                <pre>{currentTemplate.content}</pre>
+              )}
             </div>
-          ))}
+            <div className="modal-buttons">
+              <button 
+                className="modal-button cancel"
+                onClick={() => setShowPreviewModal(false)}
+              >
+                关闭
+              </button>
+              <button 
+                className="modal-button use"
+                onClick={() => {
+                  setChatInput(currentTemplate.content);
+                  setShowPreviewModal(false);
+                }}
+              >
+                使用此模板
+              </button>
+            </div>
+          </div>
         </div>
-        <div className="chat-input-container">
-          <textarea
-            className="input-box chat-input"
-            value={chatInput}
-            onChange={handleChatInputChange}
-            onKeyPress={handleKeyPress}
-            placeholder="输入消息，按Enter发送..."
-          />
-          <button 
-            className="send-button" 
-            onClick={sendMessage}
-            disabled={isLoading}
-          >
-            {isLoading ? '发送中...' : '发送'}
-          </button>
-        </div>
-      </div>
+      )}
     </div>
   );
 }
